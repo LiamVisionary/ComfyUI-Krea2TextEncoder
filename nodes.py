@@ -50,8 +50,15 @@ class TextEncodeKrea2:
                 "mask1": ("MASK",),
                 "vision_megapixels": ("FLOAT", {
                     "default": 1.0, "min": 0.1, "max": 8.0, "step": 0.1,
-                    "tooltip": "Target size (in megapixels) each reference image is area-resized to "
-                               "before the Qwen3-VL vision encoder. Higher = more visual detail, more VRAM.",
+                    "tooltip": "Maximum size (in megapixels) for each reference before the Qwen3-VL "
+                               "vision encoder. References larger than this are downscaled; smaller "
+                               "ones (e.g. a tight mask crop) are kept at native size, never upscaled.",
+                }),
+                "mask_padding": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.02,
+                    "tooltip": "Context kept around the mask before cropping, as a fraction of the "
+                               "image size added on EACH side. 0 = tight crop to the mask; 0.1 = ~10% "
+                               "margin of surroundings. Only applies when a mask is connected.",
                 }),
             },
         }
@@ -74,8 +81,9 @@ class TextEncodeKrea2:
         return out
 
     @staticmethod
-    def _crop_to_mask(image, mask):
-        """Crop image (B,H,W,C) to the bounding box of mask. No-op if mask empty/None."""
+    def _crop_to_mask(image, mask, padding=0.0):
+        """Crop image (B,H,W,C) to the mask bounding box, expanded by `padding` (a
+        fraction of the image size) on each side. No-op if mask empty/None."""
         if mask is None:
             return image
 
@@ -97,9 +105,18 @@ class TextEncodeKrea2:
         cols = torch.where(torch.any(presence, dim=0))[0]
         y0, y1 = int(rows[0]), int(rows[-1])
         x0, x1 = int(cols[0]), int(cols[-1])
+
+        if padding > 0.0:  # grow the box outward for surrounding context, clamped to the image
+            pad_x = round(padding * w)
+            pad_y = round(padding * h)
+            x0 = max(0, x0 - pad_x)
+            x1 = min(w - 1, x1 + pad_x)
+            y0 = max(0, y0 - pad_y)
+            y1 = min(h - 1, y1 + pad_y)
+
         return image[:, y0:y1 + 1, x0:x1 + 1, :]
 
-    def encode(self, clip, prompt, vision_megapixels=1.0, **kwargs):
+    def encode(self, clip, prompt, vision_megapixels=1.0, mask_padding=0.0, **kwargs):
         images = self._collect_indexed(kwargs, "image")
         masks = self._collect_indexed(kwargs, "mask")
         ordered = sorted(images.keys())
@@ -109,10 +126,13 @@ class TextEncodeKrea2:
         total = int(vision_megapixels * 1024 * 1024)
 
         for slot, n in enumerate(ordered):
-            image = self._crop_to_mask(images[n], masks.get(n))
+            image = self._crop_to_mask(images[n], masks.get(n), padding=mask_padding)
 
             samples = image.movedim(-1, 1)
-            scale_by = math.sqrt(total / (samples.shape[3] * samples.shape[2]))
+            # vision_megapixels is an upper CAP, not a fixed target: only downscale
+            # oversized references, never upscale. Otherwise a small mask crop gets
+            # magnified to fill the VLM frame and the subject reads as huge/zoomed.
+            scale_by = min(1.0, math.sqrt(total / (samples.shape[3] * samples.shape[2])))
             width = round(samples.shape[3] * scale_by)
             height = round(samples.shape[2] * scale_by)
 

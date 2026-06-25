@@ -31,7 +31,10 @@ image+mask pairs** (connect `image1`, a fresh `image2`/`mask2` pair appears, and
 
 Each reference image has an optional companion mask. When connected, the image is
 **cropped to the mask's bounding box** before the vision encoder, so the VLM only sees the
-masked region. This is *reference-image* masking — **not inpainting**: Krea2 has no
+masked region. Use **`mask_padding`** to keep surrounding context: it grows the crop box by
+that fraction of the image size on each side (`0` = tight crop, `0.1` ≈ 10% margin, high
+values ≈ the whole image). The mask is used only to compute the crop — it is not itself
+sent to the VLM. This is *reference-image* masking — **not inpainting**: Krea2 has no
 concat/inpaint pathway to regenerate a masked region of the output. (To spatially restrict
 where the *prompt* applies in the output, use ComfyUI's standard `ConditioningSetMask`
 downstream of this node — that works generically at the sampler level.)
@@ -44,7 +47,8 @@ downstream of this node — that works generically at the sampler level.)
 | `prompt` | STRING | Your text prompt. |
 | `image1…N` | IMAGE | Optional reference images; slots grow as you connect them. |
 | `mask1…N` | MASK | Optional per-image mask; crops `imageN` to the masked bounding box. |
-| `vision_megapixels` | FLOAT | Area each image is resized to before the vision encoder (default `1.0`). |
+| `mask_padding` | FLOAT | Context kept around the mask, as a fraction of image size per side (`0` = tight, default). |
+| `vision_megapixels` | FLOAT | Max size before the vision encoder; references are downscaled to this cap, never upscaled (default `1.0`). |
 
 Output is a standard `CONDITIONING` for the Krea2 sampler. With no images connected it
 works as a plain Krea2 text encoder.
