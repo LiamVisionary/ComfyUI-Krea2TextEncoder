@@ -1,0 +1,120 @@
+<svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg" font-family="Noto Sans, DejaVu Sans, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="640" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0B0E15"/>
+      <stop offset="1" stop-color="#070A10"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3FE3FF"/>
+      <stop offset="0.5" stop-color="#8B7CFF"/>
+      <stop offset="1" stop-color="#FF86D6"/>
+    </linearGradient>
+    <linearGradient id="accentH" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#3FE3FF"/>
+      <stop offset="0.5" stop-color="#8B7CFF"/>
+      <stop offset="1" stop-color="#FF86D6"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#161C2A"/>
+      <stop offset="1" stop-color="#0F1420"/>
+    </linearGradient>
+    <radialGradient id="glowC" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowV" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#A78BFA" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#A78BFA" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="34" height="34" patternUnits="userSpaceOnUse">
+      <path d="M34 0H0V34" fill="none" stroke="#9DB2D6" stroke-opacity="0.05" stroke-width="1"/>
+    </pattern>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="16" stdDeviation="24" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <!-- background -->
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#grid)"/>
+  <ellipse cx="160" cy="120" rx="420" ry="360" fill="url(#glowC)"/>
+  <ellipse cx="1120" cy="560" rx="460" ry="380" fill="url(#glowV)"/>
+  <rect x="16" y="16" width="1248" height="608" rx="28" fill="none" stroke="#2A3550" stroke-opacity="0.6" stroke-width="1.5"/>
+
+  <!-- ===================== LEFT: copy ===================== -->
+  <!-- kicker pill -->
+  <g transform="translate(96,150)">
+    <rect x="0" y="0" width="300" height="40" rx="20" fill="#121A2A" stroke="#2C3A5C" stroke-width="1.2"/>
+    <circle cx="24" cy="20" r="5" fill="url(#accent)"/>
+    <text x="42" y="26" fill="#AEB9D4" font-size="14" font-weight="700" letter-spacing="2.5">COMFYUI · CONDITIONING NODE</text>
+  </g>
+
+  <!-- title -->
+  <text x="92" y="306" fill="#F2F5FC" font-size="98" font-weight="700" letter-spacing="-2">Text Encode</text>
+  <text x="92" y="406" fill="url(#accent)" font-size="98" font-weight="700" letter-spacing="-2">(Krea2)</text>
+
+  <!-- tagline -->
+  <text x="96" y="470" fill="#9AA6C2" font-size="25" font-weight="400">Vision-aware text conditioning for the Krea2 / K2 model.</text>
+  <text x="96" y="506" fill="#9AA6C2" font-size="25" font-weight="400">Qwen3-VL-4B · 12-layer tap · mask-cropped references.</text>
+
+  <!-- feature chips -->
+  <g font-size="15" font-weight="700" letter-spacing="1.5" fill="#8FE9FF">
+    <g transform="translate(96,540)">
+      <rect width="150" height="34" rx="17" fill="#0E2030" stroke="#1E4A5E" stroke-width="1"/>
+      <text x="75" y="22" text-anchor="middle">NO-VAE PATH</text>
+    </g>
+    <g transform="translate(258,540)">
+      <rect width="186" height="34" rx="17" fill="#191430" stroke="#3A2F66" stroke-width="1"/>
+      <text x="93" y="22" text-anchor="middle" fill="#BBA9FF">DESCRIPTOR TEMPLATE</text>
+    </g>
+    <g transform="translate(456,540)">
+      <rect width="196" height="34" rx="17" fill="#2A1430" stroke="#5E2B55" stroke-width="1"/>
+      <text x="98" y="22" text-anchor="middle" fill="#FFA9DE">AUTO-GROWING SLOTS</text>
+    </g>
+  </g>
+
+  <!-- ===================== RIGHT: stylized node ===================== -->
+  <g transform="translate(792,150)">
+    <!-- shadow + panel -->
+    <rect x="0" y="0" width="396" height="340" rx="24" fill="url(#panel)" filter="url(#shadow)"/>
+    <rect x="0" y="0" width="396" height="340" rx="24" fill="none" stroke="#33415F" stroke-width="1.5"/>
+    <!-- top accent bar -->
+    <path d="M24 0 H372 A24 24 0 0 1 396 24 V34 H0 V24 A24 24 0 0 1 24 0 Z" fill="url(#accentH)"/>
+    <!-- header title -->
+    <circle cx="28" cy="62" r="6" fill="url(#accent)"/>
+    <text x="46" y="68" fill="#E8EDF8" font-size="20" font-weight="700">Text Encode (Krea2)</text>
+
+    <!-- big K2 monogram -->
+    <text x="198" y="222" text-anchor="middle" fill="url(#accent)" font-size="150" font-weight="700" letter-spacing="-4">K2</text>
+    <text x="198" y="262" text-anchor="middle" fill="#7E8BAA" font-size="17" font-weight="700" letter-spacing="2">QWEN3-VL · ×12 TAP</text>
+
+    <!-- input ports (left) -->
+    <g font-size="15" font-weight="600" fill="#A9B4D0">
+      <circle cx="0" cy="120" r="7" fill="#0F1420" stroke="#3FE3FF" stroke-width="2.5"/>
+      <text x="16" y="125">clip</text>
+      <circle cx="0" cy="160" r="7" fill="#0F1420" stroke="#8B7CFF" stroke-width="2.5"/>
+      <text x="16" y="165">image</text>
+      <circle cx="0" cy="200" r="7" fill="#0F1420" stroke="#FF86D6" stroke-width="2.5"/>
+      <text x="16" y="205">mask</text>
+    </g>
+    <!-- output port (right) -->
+    <g font-size="15" font-weight="600" fill="#A9B4D0">
+      <circle cx="396" cy="150" r="7" fill="#0F1420" stroke="#5CF2B0" stroke-width="2.5"/>
+      <text x="380" y="155" text-anchor="end">cond</text>
+    </g>
+
+    <!-- token-stack motif (bottom) -->
+    <g transform="translate(70,288)">
+      <rect x="0"   y="0" width="118" height="9" rx="4.5" fill="url(#accentH)" opacity="0.95"/>
+      <rect x="0"  y="16" width="186" height="9" rx="4.5" fill="url(#accentH)" opacity="0.7"/>
+      <rect x="0"  y="32" width="150" height="9" rx="4.5" fill="url(#accentH)" opacity="0.45"/>
+      <text x="206" y="30" fill="#56627E" font-size="13" font-weight="700" letter-spacing="2">SEQUENCE</text>
+    </g>
+  </g>
+
+  <!-- footer url -->
+  <text x="96" y="600" fill="#56627E" font-size="16" font-weight="600" letter-spacing="0.5">github.com/ethanfel/ComfyUI-Krea2TextEncoder</text>
+</svg>

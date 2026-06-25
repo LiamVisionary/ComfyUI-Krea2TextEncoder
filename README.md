@@ -1,5 +1,7 @@
 # ComfyUI-Krea2TexTEncoder
 
+![Text Encode (Krea2)](assets/social.png)
+
 **Text Encode (Krea2)** — vision-aware text conditioning for the Krea2 / K2 model
 (`kreaturbo.safetensors`), whose text encoder is **Qwen3-VL-4B** (12-layer tap).
 

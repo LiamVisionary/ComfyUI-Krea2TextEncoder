@@ -42,8 +42,19 @@ function pairEmpty(node, n) {
     return !linked(node, `image${n}`) && !linked(node, `mask${n}`);
 }
 
+// Self-heal: guarantee every imageN has a companion maskN (e.g. nodes saved before
+// masks existed, or a stale Python schema that only defined image1).
+function ensureMasks(node) {
+    for (const n of pairNumbers(node)) {
+        if (inputIndex(node, `mask${n}`) < 0) {
+            node.addInput(`mask${n}`, "MASK");
+        }
+    }
+}
+
 function syncPairs(node) {
     if (pairNumbers(node).length === 0) addPair(node, 1);
+    ensureMasks(node);
 
     // Collapse trailing fully-empty pairs down to a single spare.
     for (;;) {
