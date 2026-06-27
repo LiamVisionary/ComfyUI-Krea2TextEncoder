@@ -53,8 +53,20 @@ downstream of this node — that works generically at the sampler level.)
 | `print_prompt` | BOOLEAN | Print the assembled Qwen3-VL prompt to the ComfyUI console (debug). |
 | `vision_megapixels` | FLOAT | Max size before the vision encoder; references are downscaled to this cap, never upscaled (default `1.0`). |
 
-**Outputs:** `conditioning` (for the Krea2 sampler) and `vlm_prompt` (STRING — the full assembled
-prompt as the Qwen3-VL encoder receives it; wire to a text-preview node to inspect it).
+**Output:** `conditioning` for the Krea2 sampler. (`print_prompt` dumps the assembled Qwen3-VL
+prompt to the console for debugging.)
+
+## Inspecting what the VLM sees — `Krea2 VLM Preview`
+
+The conditioning path only extracts hidden states; it never generates text. To actually *read*
+how Qwen3-VL interprets your image + prompt, use the **`Krea2 VLM Preview`** node: it mirrors the
+encoder's image/template prep, then runs the model **generatively** (`clip.generate` → `decode`)
+and outputs the text. Same `vision_megapixels` / `mask_padding` / `vision_position` / `system_prompt`
+controls, plus `max_length` / `temperature` / `seed`.
+
+Notes: it's a *proxy* (the generated text shares the VLM's forward understanding but isn't the
+hidden-state tensor the sampler uses); it needs the encoder's `lm_head` weights; and image inputs
+require a **bf16** encoder (FP8 vision is unsupported — see below).
 
 ## System prompt (making the prompt interact with the image)
 
