@@ -177,7 +177,22 @@ class TextEncodeKrea2:
         template = ("<|im_start|>system\n" + system + "<|im_end|>\n"
                     "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n")
         tokens = clip.tokenize(image_prompt + prompt, images=images_vl, llama_template=template)
-        conditioning = clip.encode_from_tokens_scheduled(tokens)
+        try:
+            conditioning = clip.encode_from_tokens_scheduled(tokens)
+        except NotImplementedError as exc:
+            # ComfyUI's Qwen3-VL vision tower (qwen35.py fast_pos_embed_interpolate) adds the
+            # pos-embed weights without casting, so an FP8-loaded text encoder crashes on the
+            # image path. Turn the cryptic torch error into an actionable one.
+            if images_vl and "Float8" in str(exc):
+                raise RuntimeError(
+                    "Text Encode (Krea2): the Qwen3-VL text encoder is loaded in FP8, which "
+                    "ComfyUI's vision tower cannot run on the image path ('add_stub not "
+                    "implemented for Float8_e4m3fn' in the pos-embed). Load a bf16/fp16 "
+                    "Qwen3-VL-4B text encoder (e.g. a qwen3vl_4b *bf16* file) via CLIPLoader "
+                    "type 'krea2' when using image references. The FP8 encoder works only for "
+                    "text-only prompts."
+                ) from exc
+            raise
         return (conditioning,)
 
 
