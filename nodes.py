@@ -18,12 +18,19 @@ This node differs from ``TextEncodeQwenImageEdit`` in two ways:
   * it has no VAE input, and it accepts an unbounded, auto-growing set of image+mask slots.
 """
 
+import json
+import logging
 import math
+import os
 import re
+import hashlib
+from collections import OrderedDict
 
 import torch
 
 import comfy.utils
+
+LOGGER = logging.getLogger(__name__)
 
 # Keep in sync with the model's own template; fall back to a literal copy on non-Krea2 builds.
 try:
@@ -55,7 +62,466 @@ KREA2_INSTRUCT_SYSTEM = (
 )
 
 
+KREA2_JSON_COMPACT_CHARS = int(os.environ.get("KREA2_TEXTENCODER_JSON_COMPACT_CHARS", "2600"))
+KREA2_TEXTENCODER_CACHE_SIZE = int(os.environ.get("KREA2_TEXTENCODER_CACHE_SIZE", "4"))
+KREA2_JSON_PROMPT_MODES = ("json_structured", "json_minify", "json_minify_or_prose", "prose_compact")
+KREA2_JSON_PROMPT_MODE = os.environ.get("KREA2_TEXTENCODER_JSON_MODE", "json_structured").strip().lower()
+if KREA2_JSON_PROMPT_MODE not in KREA2_JSON_PROMPT_MODES:
+    KREA2_JSON_PROMPT_MODE = "json_structured"
+KREA2_JSON_TOP_LEVEL_HINTS = {
+    "subject",
+    "hair",
+    "body",
+    "pose",
+    "clothing",
+    "accessories",
+    "photography",
+    "background",
+    "the_vibe",
+    "constraints",
+    "negative_prompt",
+}
+KREA2_JSON_SECTION_ORDER = (
+    "constraints",
+    "background",
+    "photography",
+    "subject",
+    "pose",
+    "body",
+    "hair",
+    "clothing",
+    "accessories",
+    "the_vibe",
+)
+KREA2_JSON_SKIP_STRINGS = KREA2_JSON_TOP_LEVEL_HINTS | {
+    "description",
+    "mirror_rules",
+    "age",
+    "expression",
+    "eyes",
+    "look",
+    "energy",
+    "direction",
+    "mouth",
+    "position",
+    "overall",
+    "face",
+    "preserve_original",
+    "makeup",
+    "color",
+    "style",
+    "effect",
+    "frame",
+    "waist",
+    "chest",
+    "legs",
+    "skin",
+    "visible_areas",
+    "tone",
+    "texture",
+    "lighting_effect",
+    "base",
+    "top",
+    "bottom",
+    "type",
+    "details",
+    "headwear",
+    "jewelry",
+    "device",
+    "prop",
+    "camera_style",
+    "angle",
+    "shot_type",
+    "aspect_ratio",
+    "lighting",
+    "depth_of_field",
+    "composition",
+    "crop_control",
+    "lens",
+    "setting",
+    "wall_color",
+    "elements",
+    "atmosphere",
+    "mood",
+    "aesthetic",
+    "authenticity",
+    "intimacy",
+    "story",
+    "caption_energy",
+    "must_keep",
+    "avoid",
+}
+
+
+def _clean_prompt_leaf(value):
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return re.sub(r"\s+", " ", str(value)).strip(" ,;")
+
+
+def _prompt_leaves(value):
+    if isinstance(value, dict):
+        leaves = []
+        for item in value.values():
+            leaves.extend(_prompt_leaves(item))
+        return leaves
+    if isinstance(value, list):
+        leaves = []
+        for item in value:
+            leaves.extend(_prompt_leaves(item))
+        return leaves
+    text = _clean_prompt_leaf(value)
+    return [text] if text else []
+
+
+def _prompt_at_path(value, *path):
+    current = value
+    for part in path:
+        if not isinstance(current, dict):
+            return []
+        current = current.get(part)
+    return _prompt_leaves(current)
+
+
+def _dedupe_items(items, seen, limit):
+    out = []
+    for item in items:
+        text = _clean_prompt_leaf(item)
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _append_compact_segment(segments, seen, label, items, limit=12):
+    values = _dedupe_items(items, seen, limit)
+    if values:
+        segments.append(f"{label}: " + "; ".join(values))
+
+
+def _truncate_prompt(text, max_chars):
+    if len(text) <= max_chars:
+        return text
+    clipped = text[:max_chars].rstrip()
+    boundary = max(clipped.rfind(". "), clipped.rfind("; "), clipped.rfind(", "))
+    if boundary >= max(240, int(max_chars * 0.7)):
+        clipped = clipped[: boundary + 1].rstrip()
+    return clipped.rstrip(" ,;.")
+
+
+def _join_compact_segments(segments, max_chars):
+    result = []
+    for segment in segments:
+        candidate = ". ".join([*result, segment]) if result else segment
+        if len(candidate) <= max_chars:
+            result.append(segment)
+        elif not result:
+            return _truncate_prompt(segment, max_chars)
+    return ". ".join(result) if result else ""
+
+
+def _looks_like_krea2_json_prompt(text):
+    if len(text) < 200:
+        return False
+    lowered = text.lower()
+    return sum(1 for key in KREA2_JSON_TOP_LEVEL_HINTS if f'"{key}"' in lowered or key in lowered) >= 4
+
+
+JSON_MISSING_COMMA_BEFORE_PROPERTY_PATTERN = re.compile(
+    r'((?:true|false|null)|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[}\]"])'
+    r'([ \t\r]*\n[ \t]*)(?="[^"\n]{1,160}"[ \t]*:)'
+)
+JSON_MISSING_COMMA_BETWEEN_STRING_ITEMS_PATTERN = re.compile(
+    r'(")([ \t\r]*\n[ \t]*)(?="[^"\n]*"[ \t\r\n]*(?:,|\]))'
+)
+
+
+def _repair_common_json_delimiters(text):
+    repaired = JSON_MISSING_COMMA_BEFORE_PROPERTY_PATTERN.sub(r"\1,\2", text)
+    repaired = JSON_MISSING_COMMA_BETWEEN_STRING_ITEMS_PATTERN.sub(r"\1,\2", repaired)
+    return repaired
+
+
+def _loads_json_with_common_repairs(text):
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        repaired = _repair_common_json_delimiters(text)
+        if repaired != text:
+            try:
+                return json.loads(repaired)
+            except json.JSONDecodeError:
+                pass
+        raise exc
+
+
+def _extract_krea2_json_text(text):
+    json_text = str(text or "").strip()
+    if not json_text.startswith("{"):
+        start = json_text.find("{")
+        end = json_text.rfind("}")
+        if start >= 0 and end > start:
+            json_text = json_text[start : end + 1].strip()
+    return json_text
+
+
+def _normalize_krea2_json_like_text(text):
+    json_text = _extract_krea2_json_text(text)
+    if not _looks_like_krea2_json_prompt(json_text):
+        return text
+    # Keep the JSON/key/value structure for Krea2, but remove wrapper text and indentation.
+    lines = [line.strip() for line in json_text.splitlines() if line.strip()]
+    return "\n".join(lines) if lines else json_text.strip()
+
+
+def _load_krea2_json_prompt_value(prompt):
+    text = str(prompt or "").strip()
+    if len(text) < 200:
+        return None
+    json_text = _extract_krea2_json_text(text)
+    value = _loads_json_with_common_repairs(json_text)
+    if not isinstance(value, dict) or len(KREA2_JSON_TOP_LEVEL_HINTS.intersection(value.keys())) < 4:
+        return None
+    return value
+
+
+def _strip_krea2_negation_lists(value):
+    # negative_prompt / constraints.avoid are meant for a separate negative-conditioning pass.
+    # This compacted text is encoded as POSITIVE conditioning, and the Krea2 turbo workflows
+    # run CFG 1.0 where the negative pass is skipped, so keeping the lists only injects the
+    # named failure concepts into the image and slows every denoise step.
+    if isinstance(value, dict):
+        value.pop("negative_prompt", None)
+        constraints = value.get("constraints")
+        if isinstance(constraints, dict):
+            constraints.pop("avoid", None)
+    return value
+
+
+def _minify_krea2_json_prompt(prompt, max_chars=KREA2_JSON_COMPACT_CHARS):
+    text = str(prompt or "").strip()
+    try:
+        value = _load_krea2_json_prompt_value(text)
+    except Exception:
+        return _normalize_krea2_json_like_text(text)
+    if value is None:
+        return prompt
+    value = _strip_krea2_negation_lists(value)
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _structured_krea2_json_prompt(prompt):
+    text = str(prompt or "").strip()
+    try:
+        value = _load_krea2_json_prompt_value(text)
+    except Exception:
+        return _normalize_krea2_json_like_text(text)
+    if value is None:
+        return prompt
+    value = _strip_krea2_negation_lists(value)
+    return json.dumps(value, ensure_ascii=False, indent=1, separators=(",", ": "))
+
+
+def _extract_quoted_prompt_values(text):
+    values = []
+    for match in re.finditer(r'"((?:\\.|[^"\\])*)"', text):
+        tail = text[match.end() : match.end() + 12]
+        if re.match(r"\s*:", tail):
+            continue
+        raw = match.group(1)
+        try:
+            value = json.loads('"' + raw + '"')
+        except Exception:
+            value = raw.replace(r"\"", '"').replace(r"\\", "\\")
+        cleaned = _clean_prompt_leaf(value)
+        if not cleaned:
+            continue
+        if cleaned.lower() in KREA2_JSON_SKIP_STRINGS:
+            continue
+        values.append(cleaned)
+    return values
+
+
+def _fallback_compact_krea2_json_like_prompt(text, max_chars):
+    if not _looks_like_krea2_json_prompt(text):
+        return text
+
+    positions = []
+    lowered = text.lower()
+    for section in KREA2_JSON_SECTION_ORDER:
+        index = lowered.find(f'"{section}"')
+        if index < 0:
+            index = lowered.find(section)
+        if index >= 0:
+            positions.append((index, section))
+    positions.sort()
+
+    segments = []
+    seen = set()
+    for order_section in KREA2_JSON_SECTION_ORDER:
+        for pos_index, (start, section) in enumerate(positions):
+            if section != order_section:
+                continue
+            end = positions[pos_index + 1][0] if pos_index + 1 < len(positions) else len(text)
+            values = _extract_quoted_prompt_values(text[start:end])
+            _append_compact_segment(segments, seen, section.replace("_", " "), values, limit=16)
+
+    if not segments:
+        _append_compact_segment(segments, seen, "prompt", _extract_quoted_prompt_values(text), limit=48)
+    compact = _join_compact_segments(segments, max_chars)
+    return compact or _truncate_prompt(re.sub(r"\s+", " ", text).strip(), max_chars)
+
+
+def _prose_compact_krea2_json_prompt(prompt, max_chars=KREA2_JSON_COMPACT_CHARS):
+    text = str(prompt or "").strip()
+    if len(text) < 200:
+        return prompt
+    try:
+        value = _load_krea2_json_prompt_value(text)
+    except Exception:
+        return _fallback_compact_krea2_json_like_prompt(text, max_chars)
+    if value is None:
+        return prompt
+
+    max_chars = max(300, min(8000, int(max_chars or KREA2_JSON_COMPACT_CHARS)))
+    segments = []
+    seen = set()
+    _append_compact_segment(
+        segments,
+        seen,
+        "must keep",
+        _prompt_at_path(value, "constraints", "must_keep"),
+        limit=24,
+    )
+    _append_compact_segment(
+        segments,
+        seen,
+        "scene",
+        [
+            *_prompt_at_path(value, "background", "setting"),
+            *_prompt_at_path(value, "background", "elements"),
+            *_prompt_at_path(value, "accessories", "prop"),
+        ],
+        limit=10,
+    )
+    _append_compact_segment(
+        segments,
+        seen,
+        "camera and framing",
+        [
+            *_prompt_at_path(value, "photography", "shot_type"),
+            *_prompt_at_path(value, "photography", "composition"),
+            *_prompt_at_path(value, "photography", "crop_control"),
+            *_prompt_at_path(value, "photography", "angle"),
+            *_prompt_at_path(value, "photography", "lens"),
+            *_prompt_at_path(value, "photography", "aspect_ratio"),
+        ],
+        limit=14,
+    )
+    _append_compact_segment(
+        segments,
+        seen,
+        "subject",
+        [
+            *_prompt_at_path(value, "subject", "description"),
+            *_prompt_at_path(value, "subject", "age"),
+            *_prompt_at_path(value, "subject", "mirror_rules"),
+            *_prompt_at_path(value, "subject", "face"),
+            *_prompt_at_path(value, "subject", "expression"),
+        ],
+        limit=14,
+    )
+    _append_compact_segment(
+        segments,
+        seen,
+        "pose and body placement",
+        [*_prompt_at_path(value, "pose"), *_prompt_at_path(value, "body")],
+        limit=16,
+    )
+    _append_compact_segment(
+        segments,
+        seen,
+        "appearance",
+        [*_prompt_at_path(value, "hair"), *_prompt_at_path(value, "clothing"), *_prompt_at_path(value, "accessories")],
+        limit=14,
+    )
+    # No "avoid" segment: constraints.avoid / negative_prompt are negation lists meant for a
+    # separate negative pass; naming those concepts in positive prose summons them instead.
+    _append_compact_segment(
+        segments,
+        seen,
+        "style",
+        [
+            *_prompt_at_path(value, "photography", "camera_style"),
+            *_prompt_at_path(value, "photography", "lighting"),
+            *_prompt_at_path(value, "photography", "depth_of_field"),
+            *_prompt_at_path(value, "photography", "texture"),
+            *_prompt_at_path(value, "the_vibe"),
+        ],
+        limit=12,
+    )
+    compact = _join_compact_segments(segments, max_chars)
+    return compact or prompt
+
+
+def _compact_krea2_json_prompt(prompt, max_chars=KREA2_JSON_COMPACT_CHARS, mode=KREA2_JSON_PROMPT_MODE):
+    normalized_mode = (mode or KREA2_JSON_PROMPT_MODE).strip().lower()
+    if normalized_mode not in KREA2_JSON_PROMPT_MODES:
+        normalized_mode = "json_structured"
+
+    if normalized_mode == "prose_compact":
+        return _prose_compact_krea2_json_prompt(prompt, max_chars=max_chars)
+
+    if normalized_mode == "json_minify_or_prose":
+        text = str(prompt or "").strip()
+        minified = _minify_krea2_json_prompt(prompt, max_chars=max_chars)
+        if isinstance(minified, str) and minified != text and len(minified) <= max_chars:
+            return minified
+        if not _looks_like_krea2_json_prompt(text):
+            return prompt
+        return _prose_compact_krea2_json_prompt(prompt, max_chars=max_chars)
+
+    if normalized_mode == "json_minify":
+        return _minify_krea2_json_prompt(prompt, max_chars=max_chars)
+    return _structured_krea2_json_prompt(prompt)
+
+
+def _clone_conditioning_value(value):
+    if torch.is_tensor(value):
+        return value.clone()
+    if isinstance(value, dict):
+        return {key: _clone_conditioning_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_clone_conditioning_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_clone_conditioning_value(item) for item in value)
+    return value
+
+
+def _text_conditioning_cache_key(clip, text, template):
+    h = hashlib.sha256()
+    h.update(str(id(clip)).encode("ascii", "ignore"))
+    h.update(b"\0")
+    h.update(str(template or "").encode("utf-8", "surrogatepass"))
+    h.update(b"\0")
+    h.update(str(text or "").encode("utf-8", "surrogatepass"))
+    return h.hexdigest()
+
+
 class TextEncodeKrea2:
+    def __init__(self):
+        self._text_conditioning_cache = OrderedDict()
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -98,6 +564,16 @@ class TextEncodeKrea2:
                     "default": False,
                     "tooltip": "Print the full assembled prompt sent to the Qwen3-VL encoder (system "
                                "instruction + vision placeholders + your text) to the ComfyUI console.",
+                }),
+                "auto_compact_json": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Automatically optimize Krea2 photo JSON prompts before tokenization. "
+                               "The default mode preserves raw JSON line structure for adherence.",
+                }),
+                "json_prompt_mode": (list(KREA2_JSON_PROMPT_MODES), {
+                    "default": KREA2_JSON_PROMPT_MODE,
+                    "tooltip": "json_structured is adherence-first. json_minify and prose_compact are "
+                               "speed-testing modes and can reduce prompt adherence.",
                 }),
             },
         }
@@ -208,8 +684,21 @@ class TextEncodeKrea2:
 
     def encode(self, clip, prompt, vision_megapixels=1.0, mask_padding=0.0,
                system_prompt=KREA2_SYSTEM_DEFAULT, vision_position="before prompt",
-               print_prompt=False, **kwargs):
+               print_prompt=False, auto_compact_json=True,
+               json_prompt_mode=KREA2_JSON_PROMPT_MODE, **kwargs):
         images_vl, image_prompt = self._prepare_vision(kwargs, vision_megapixels, mask_padding)
+        if auto_compact_json:
+            raw_prompt = str(prompt or "")
+            optimized_prompt = _compact_krea2_json_prompt(prompt, mode=json_prompt_mode)
+            if isinstance(optimized_prompt, str) and optimized_prompt != raw_prompt:
+                LOGGER.info(
+                    "TextEncodeKrea2 optimized prompt: mode=%s raw_chars=%d optimized_chars=%d references=%d",
+                    json_prompt_mode,
+                    len(raw_prompt),
+                    len(optimized_prompt),
+                    len(images_vl),
+                )
+            prompt = optimized_prompt
         text, template = self._build_text(system_prompt, prompt, image_prompt, vision_position)
 
         if print_prompt:
@@ -217,6 +706,20 @@ class TextEncodeKrea2:
             print(template.replace("{}", text, 1))  # literal replace: brace-safe
             print("---- references: {} ----".format(len(images_vl)))
             print("===========================================================\n")
+
+        cache_key = None
+        cache_enabled = KREA2_TEXTENCODER_CACHE_SIZE > 0 and not images_vl
+        if cache_enabled:
+            cache_key = _text_conditioning_cache_key(clip, text, template)
+            cached = self._text_conditioning_cache.get(cache_key)
+            if cached is not None:
+                self._text_conditioning_cache.move_to_end(cache_key)
+                LOGGER.info(
+                    "TextEncodeKrea2 conditioning cache hit: prompt_chars=%d references=0 key=%s",
+                    len(str(prompt or "")),
+                    cache_key[:12],
+                )
+                return (_clone_conditioning_value(cached),)
 
         tokens = clip.tokenize(text, images=images_vl, llama_template=template)
         try:
@@ -226,6 +729,17 @@ class TextEncodeKrea2:
             if hint is not None:
                 raise hint from exc
             raise
+        if cache_enabled and cache_key is not None:
+            self._text_conditioning_cache[cache_key] = _clone_conditioning_value(conditioning)
+            self._text_conditioning_cache.move_to_end(cache_key)
+            while len(self._text_conditioning_cache) > KREA2_TEXTENCODER_CACHE_SIZE:
+                self._text_conditioning_cache.popitem(last=False)
+            LOGGER.info(
+                "TextEncodeKrea2 conditioning cache store: prompt_chars=%d references=0 key=%s size=%d",
+                len(str(prompt or "")),
+                cache_key[:12],
+                len(self._text_conditioning_cache),
+            )
         return (conditioning,)
 
 
