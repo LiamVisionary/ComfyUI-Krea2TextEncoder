@@ -295,6 +295,149 @@ def _load_krea2_json_prompt_value(prompt):
     return value
 
 
+# Exact meta-visibility phrases that older prompt-assistant injector versions stamped into
+# must_keep and background.elements. Not caption language; scrubbed at encode time so old
+# saved workflows and mobile canvases are healed automatically.
+KREA2_LEGACY_META_PHRASES = {
+    "medium framing",
+    "medium-wide framing",
+    "subject fully inside frame",
+    "both subjects fully inside frame",
+    "camera pulled back from the subjects",
+    "visible surrounding room",
+    "concrete body-part and environment anchors",
+    "requested body parts visibly placed with action/detail",
+    "visible floor plane or furniture contact points",
+    "visible legs/feet or footwear details",
+    "visible legs and feet",
+    "full sofa visible",
+    "female legs and feet on sofa cushions",
+    "female legs and feet stay on the sofa cushions",
+    "female feet not on floor",
+    "female toe tips and heels fully on sofa cushions",
+    "no female leg hanging off sofa",
+    "male feet planted on floor",
+    "role-specific lower body placement: female feet sofa, male feet floor",
+    "male eyes, hairline, crown, and facial hair visible",
+    "male full head, eyes, and facial hair visible with headroom",
+    "background headroom above male crown",
+    "visible floor plane",
+    "floor or furniture contact points",
+    "sofa cushions under female feet",
+    "floor under male planted feet",
+    "background space above male head",
+    "male eyes and hairline visible",
+    "male crown/top of head visible",
+    "couch arms visible",
+    "surrounding room",
+}
+
+
+# Exact meta-visibility sentences older prompt-assistant injector versions appended to prose
+# fields. Only clearly-meta constants are listed; concrete imagery phrases are left alone.
+KREA2_LEGACY_META_SENTENCES = (
+    "no cropped heads, torsos, or out-of-frame subjects; no face-only or tight-portrait crop",
+    "no face-only crop, no tight upper-body portrait, no cropped heads, no cropped torsos, no out-of-frame subjects",
+    "no cropped top of male head, no clipped hairline, no clipped crown, keep eyes and hair visible with headroom",
+    "medium shot with visible surrounding environment, not a tight portrait",
+    "medium-wide shot with the camera pulled back",
+    "subjects occupy roughly 45 percent of the frame width, with readable room context",
+    "subjects occupy roughly 55 percent of the frame width, with background still visible",
+    "two-person composition with both adults visibly placed in the same frame",
+    "visible knees, legs, feet, waist, hands, and head described with actions and details",
+    "visible knees, legs, feet, waist, hands, head, and other requested body anchors are described with actions/details",
+    "visible band of background above the male hairline so his full head, eyes, and facial hair stay in frame",
+    "leave a visible band of background above the male hairline and crown so the top of his head is not clipped",
+    "full sofa context visible, including couch arms and surrounding room space",
+    "full sofa context visible, including couch arms, pillows, and surrounding room space",
+    "frame anchored by concrete visible body-part details and environment/furniture references, not abstract wide-shot wording alone",
+    "environment and floor or furniture anchors established before the subjects",
+    "keep heads, torsos, hands, and the relationship between subjects inside the frame",
+    "keep requested body parts visible by describing their placement and action",
+    "female subject's legs and feet remain visible on top of the sofa cushions, not under the male subject's legs",
+    "male subject's full head remains visible, including eyes, eyebrows, forehead, hairline, crown/top of head, and facial hair",
+    "requested lower-body parts have visible placement and concrete detail",
+    "pose grounded by visible floor, sofa, or furniture contact points",
+    "lower body and footwear or bare-foot details remain visible when requested",
+    "female lower body and both feet stay entirely on the sofa cushions, no toe tips touching the floor",
+    "female legs and both feet visible on sofa cushions as a separate foreground/midground shape, with no leg hanging off the sofa edge",
+    "floor visibility belongs to the male planted feet, while the female feet stay on sofa cushions",
+    "visible floor plane or furniture contact points hold the frame open",
+    "upper background space above the male head remains visible",
+    "male feet visible on the floor; female feet do not move to the floor",
+)
+
+
+def _krea2_meta_phrase_key(item):
+    return re.sub(r"\s+", " ", str(item or "")).strip(" ,;.").lower()
+
+
+def _scrub_krea2_legacy_meta_prose(node):
+    if isinstance(node, dict):
+        return {key: _scrub_krea2_legacy_meta_prose(item) for key, item in node.items()}
+    if isinstance(node, list):
+        return [_scrub_krea2_legacy_meta_prose(item) for item in node]
+    if not isinstance(node, str):
+        return node
+    text = node
+    for sentence in KREA2_LEGACY_META_SENTENCES:
+        if sentence not in text:
+            continue
+        for form in (", " + sentence, "; " + sentence, ". " + sentence, sentence + ", ", sentence + "; ", sentence):
+            text = text.replace(form, "")
+    if text != node:
+        text = re.sub(r"\s*([,;])\s*(?:[,;]\s*)+", r"\1 ", text)
+        text = re.sub(r"\s{2,}", " ", text)
+        text = text.strip(" ,;")
+    return text
+
+
+def _drop_krea2_legacy_meta_items(value):
+    if not isinstance(value, dict):
+        return value
+    value = _scrub_krea2_legacy_meta_prose(value)
+    constraints = value.get("constraints")
+    if isinstance(constraints, dict) and isinstance(constraints.get("must_keep"), list):
+        constraints["must_keep"] = [
+            item for item in constraints["must_keep"]
+            if _krea2_meta_phrase_key(item) not in KREA2_LEGACY_META_PHRASES
+        ]
+    background = value.get("background")
+    if isinstance(background, dict) and isinstance(background.get("elements"), list):
+        background["elements"] = [
+            item for item in background["elements"]
+            if _krea2_meta_phrase_key(item) not in KREA2_LEGACY_META_PHRASES
+        ]
+    return value
+
+
+# Encode-time top-level key order: scene and camera before subject. Krea2 respects framing
+# better when environment anchors come first in the conditioning.
+KREA2_SCENE_FIRST_KEY_ORDER = (
+    "background",
+    "photography",
+    "subject",
+    "hair",
+    "body",
+    "pose",
+    "clothing",
+    "accessories",
+    "the_vibe",
+    "constraints",
+    "negative_prompt",
+)
+
+
+def _scene_first_krea2_value(value):
+    if not isinstance(value, dict):
+        return value
+    ordered = {key: value[key] for key in KREA2_SCENE_FIRST_KEY_ORDER if key in value}
+    for key, item in value.items():
+        if key not in ordered:
+            ordered[key] = item
+    return ordered
+
+
 def _strip_krea2_negation_lists(value):
     # negative_prompt / constraints.avoid are meant for a separate negative-conditioning pass.
     # This compacted text is encoded as POSITIVE conditioning, and the Krea2 turbo workflows
@@ -316,7 +459,7 @@ def _minify_krea2_json_prompt(prompt, max_chars=KREA2_JSON_COMPACT_CHARS):
         return _normalize_krea2_json_like_text(text)
     if value is None:
         return prompt
-    value = _strip_krea2_negation_lists(value)
+    value = _scene_first_krea2_value(_drop_krea2_legacy_meta_items(_strip_krea2_negation_lists(value)))
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -328,7 +471,7 @@ def _structured_krea2_json_prompt(prompt):
         return _normalize_krea2_json_like_text(text)
     if value is None:
         return prompt
-    value = _strip_krea2_negation_lists(value)
+    value = _scene_first_krea2_value(_drop_krea2_legacy_meta_items(_strip_krea2_negation_lists(value)))
     return json.dumps(value, ensure_ascii=False, indent=1, separators=(",", ": "))
 
 

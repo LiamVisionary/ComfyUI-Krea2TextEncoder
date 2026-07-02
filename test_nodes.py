@@ -78,6 +78,8 @@ class Krea2TextEncoderPromptTests(unittest.TestCase):
         self.assertNotIn("female feet on floor", compact)
         self.assertNotIn("female leg hanging off sofa", compact)
         self.assertIn("exact requested age: 30", compact)
+        # Scene-first encoding: environment anchors come before the subject.
+        self.assertLess(compact.index('"background"'), compact.index('"subject"'))
 
     def test_plain_prompt_is_unchanged(self) -> None:
         prompt = "medium-wide living room photo with visible floor plane"
