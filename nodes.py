@@ -365,6 +365,7 @@ KREA2_LEGACY_META_SENTENCES = (
     "visible floor plane or furniture contact points hold the frame open",
     "upper background space above the male head remains visible",
     "male feet visible on the floor; female feet do not move to the floor",
+    "16:9 landscape framing",
 )
 
 
@@ -396,6 +397,11 @@ def _drop_krea2_legacy_meta_items(value):
     if not isinstance(value, dict):
         return value
     value = _scrub_krea2_legacy_meta_prose(value)
+    # Krea2 ignores aspect-ratio text entirely - the latent resolution controls it -
+    # so the field is pure token cost in the conditioning.
+    photography = value.get("photography")
+    if isinstance(photography, dict):
+        photography.pop("aspect_ratio", None)
     constraints = value.get("constraints")
     if isinstance(constraints, dict) and isinstance(constraints.get("must_keep"), list):
         constraints["must_keep"] = [
@@ -567,7 +573,6 @@ def _prose_compact_krea2_json_prompt(prompt, max_chars=KREA2_JSON_COMPACT_CHARS)
             *_prompt_at_path(value, "photography", "crop_control"),
             *_prompt_at_path(value, "photography", "angle"),
             *_prompt_at_path(value, "photography", "lens"),
-            *_prompt_at_path(value, "photography", "aspect_ratio"),
         ],
         limit=14,
     )

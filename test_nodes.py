@@ -60,7 +60,7 @@ class Krea2TextEncoderPromptTests(unittest.TestCase):
                 "subject": {"description": "An adult woman in a living room", "age": "30"},
                 "body": {"legs": "legs visible on sofa cushions"},
                 "pose": {"position": "seated"},
-                "photography": {"shot_type": "medium-wide shot"},
+                "photography": {"shot_type": "medium-wide shot", "aspect_ratio": "16:9"},
                 "background": {"setting": "living room"},
                 "constraints": {
                     "must_keep": ["exact requested age: 30"],
@@ -78,6 +78,8 @@ class Krea2TextEncoderPromptTests(unittest.TestCase):
         self.assertNotIn("female feet on floor", compact)
         self.assertNotIn("female leg hanging off sofa", compact)
         self.assertIn("exact requested age: 30", compact)
+        # Krea2 ignores aspect-ratio text; the field is dropped from conditioning.
+        self.assertNotIn('"aspect_ratio"', compact)
         # Scene-first encoding: environment anchors come before the subject.
         self.assertLess(compact.index('"background"'), compact.index('"subject"'))
 
