@@ -64,6 +64,7 @@ KREA2_INSTRUCT_SYSTEM = (
 
 KREA2_JSON_COMPACT_CHARS = int(os.environ.get("KREA2_TEXTENCODER_JSON_COMPACT_CHARS", "2600"))
 KREA2_TEXTENCODER_CACHE_SIZE = int(os.environ.get("KREA2_TEXTENCODER_CACHE_SIZE", "4"))
+KREA2_ALLOW_RAW_PROMPT_LOG = os.environ.get("KREA2_TEXTENCODER_ALLOW_RAW_PROMPT_LOG", "0") == "1"
 KREA2_JSON_PROMPT_MODES = ("json_structured", "json_minify", "json_minify_or_prose", "prose_compact")
 KREA2_JSON_PROMPT_MODE = os.environ.get("KREA2_TEXTENCODER_JSON_MODE", "json_structured").strip().lower()
 if KREA2_JSON_PROMPT_MODE not in KREA2_JSON_PROMPT_MODES:
@@ -666,6 +667,10 @@ def _text_conditioning_cache_key(clip, text, template):
     return h.hexdigest()
 
 
+def _prompt_log_hash(value):
+    return hashlib.sha256(str(value or "").encode("utf-8", "surrogatepass")).hexdigest()[:12]
+
+
 class TextEncodeKrea2:
     def __init__(self):
         self._text_conditioning_cache = OrderedDict()
@@ -710,8 +715,8 @@ class TextEncodeKrea2:
                 }),
                 "print_prompt": ("BOOLEAN", {
                     "default": False,
-                    "tooltip": "Print the full assembled prompt sent to the Qwen3-VL encoder (system "
-                               "instruction + vision placeholders + your text) to the ComfyUI console.",
+                    "tooltip": "Print redacted debug metadata for the assembled Qwen3-VL prompt. Raw "
+                               "prompt logging is disabled unless KREA2_TEXTENCODER_ALLOW_RAW_PROMPT_LOG=1.",
                 }),
                 "auto_compact_json": ("BOOLEAN", {
                     "default": True,
@@ -851,7 +856,19 @@ class TextEncodeKrea2:
 
         if print_prompt:
             print("\n========== Text Encode (Krea2) -> Qwen3-VL prompt ==========")
-            print(template.replace("{}", text, 1))  # literal replace: brace-safe
+            if KREA2_ALLOW_RAW_PROMPT_LOG:
+                print(template.replace("{}", text, 1))  # literal replace: brace-safe
+            else:
+                print(
+                    "redacted prompt debug: prompt_chars={} template_chars={} references={} "
+                    "prompt_hash={} template_hash={}".format(
+                        len(str(prompt or "")),
+                        len(str(template or "")),
+                        len(images_vl),
+                        _prompt_log_hash(prompt),
+                        _prompt_log_hash(template),
+                    )
+                )
             print("---- references: {} ----".format(len(images_vl)))
             print("===========================================================\n")
 
